@@ -259,7 +259,7 @@ using COMMENTS."
   (cond
    ((string-prefix-p (format "https://%s" code-review-gitlab-base-url) url)
     (save-match-data
-      (and (string-match (format "https://%s/\\([^/]*\\)/\\(.*\\)/-/merge_requests/\\([0-9]+\\)"
+      (and (string-match (format "https://%s/\\([^/]*\\)/\\(.*\\)/merge_requests/\\([0-9]+\\)"
                                  code-review-gitlab-base-url)
                          url)
            (a-alist 'num (match-string 3 url)

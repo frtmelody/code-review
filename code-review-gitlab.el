@@ -43,7 +43,7 @@
 (defcustom code-review-gitlab-host "gitlab.com/api"
   "Host for the Gitlab api if you use the hosted version of Gitlab."
   :group 'code-review-gitlab
-  :type 'string)
+  etype 'string)
 
 (defcustom code-review-gitlab-graphql-host "gitlab.com/api"
   "Host for Graphql in Gitlab."
@@ -299,92 +299,277 @@ The payload is used to send a MR review to Gitlab."
       d))
     d))
 
-(cl-defmethod code-review-pullreq-infos ((gitlab code-review-gitlab-repo) fallback? callback)
-  "Get PR details from GITLAB, choose minimal query on FALLBACK? and dispatch to CALLBACK."
-  (let* ((owner (oref gitlab owner))
-         (repo (oref gitlab repo))
-         (repo-clean (replace-regexp-in-string "%2F" "/" repo))
-         (number (oref gitlab number))
-         (query
-          (format "query{
-repository:project(fullPath: \"%s\") {
-    pullRequest:mergeRequest(iid: \"%s\") {
-      id
-      author {
-        login:username
-        url:webUrl
-      }
-      comments:notes(first: 50){
-        nodes {
-          databaseId:id
-          discussion {
-            id
-          }
-          bodyHTML:bodyHtml
-          author {
-            login:username
-          }
-          createdAt
-          updatedAt
-          system
-          resolvable
-          position {
-            height
-            newLine
-            newPath
-            oldLine
-            oldPath
-            width
-            x
-            y
-          }
-        }
-      }
-      diffRefs {
-        baseSha
-        headSha
-        startSha
-      }
-      headRefName:sourceBranch
-      baseRefName:targetBranch
-      commitCount
-      commitsWithoutMergeCommits(first: 100) {
-        nodes {
-          abbreviatedOid:shortId
-          message
-        }
-      }
-      number: iid
-      isDraft: draft
-      databaseId: iid
-      createdAt
-      updatedAt
-      milestone {
-        title
-      }
-      labels(first: 10) {
-        nodes{
-          color
-          name: title
-        }
-      }
-      assignees(first: 15) {
-        nodes{
-          name
-          login: username
-        }
-      }
-      title
-      state
-      bodyHTML:descriptionHtml
-    }
-  }
-}
-" (format "%s/%s" owner repo-clean) number)))
-    (code-review-gitlab--graphql
-     query
-     nil
-     callback)))
+;; (cl-defmethod code-review-pullreq-infos ((gitlab code-review-gitlab-repo) fallback? callback)
+;;   "Get PR details from GITLAB, choose minimal query on FALLBACK? and dispatch to CALLBACK."
+;;   (let* ((owner (oref gitlab owner))
+;;          (repo (oref gitlab repo))
+;;          (repo-clean (replace-regexp-in-string "%2F" "/" repo))
+;;          (number (oref gitlab number))
+;;          (query
+;;           (format "
+;; query{
+;; repository:project(fullPath: \"%s\") {
+;;     pullRequest:mergeRequest(iid: \"%s\") {
+;;       id
+;;       author {
+;;         login:username
+;;         url:webUrl
+;;       }
+;;       comments:notes(first: 50){
+;;         nodes {
+;;           databaseId:id
+;;           discussion {
+;;             id
+;;           }
+;;           bodyHTML:bodyHtml
+;;           author {
+;;             login:username
+;;           }
+;;           createdAt
+;;           updatedAt
+;;           system
+;;           resolvable
+;;           position {
+;;             height
+;;             newLine
+;;             newPath
+;;             oldLine
+;;             oldPath
+;;             width
+;;             x
+;;             y
+;;           }
+;;         }
+;;       }
+;;       diffRefs {
+;;         baseSha
+;;         headSha
+;;         startSha
+;;       }
+;;       headRefName:sourceBranch
+;;       baseRefName:targetBranch
+;;       commitCount
+;;       commitsWithoutMergeCommits(first: 100) {
+;;         nodes {
+;;           abbreviatedOid:shortId
+;;           message
+;;         }
+;;       }
+;;       number: iid
+;;       isDraft: draft
+;;       databaseId: iid
+;;       createdAt
+;;       updatedAt
+;;       milestone {
+;;         title
+;;       }
+;;       labels(first: 10) {
+;;         nodes{
+;;           color
+;;           name: title
+;;         }
+;;       }
+;;       assignees(first: 15) {
+;;         nodes{
+;;           name
+;;           login: username
+;;         }
+;;       }
+;;       title
+;;       state
+;;       bodyHTML:descriptionHtml
+;;     }
+;;   }
+;; }
+;; " (format "%s/%s" owner repo-clean) number)))
+;;     (code-review-gitlab--graphql
+;;      query
+;;      nil
+;;      callback)))
+;;
+;;
+;;;  ====================
+;;       commitCount
+;;       commitsWithoutMergeCommits(first: 100) {
+;;         nodes {
+;;           abbreviatedOid:shortId
+;;           message
+;;         }
+;;       }
+(defun code-review-gitlab--commits (raw-commits)
+  `((commitCount . ,(length raw-commits))
+    (commitsWithoutMergeCommits .,(-map
+                   (lambda (it)
+                (let-alist it
+                  `((nodes . (
+                              (abbreviatedOid. , .short_id)
+                              (message. , .message))))))
+              raw-commits))))
+;;;  ======================================
+;;       comments:notes(first: 50){
+;;         nodes {
+;;           databaseId:id
+;;           discussion {
+;;             id
+;;           }
+;;           bodyHTML:bodyHtml
+;;           author {
+;;             login:username
+;;           }
+;;           createdAt
+;;           updatedAt
+;;           system
+;;           resolvable
+;;           position {
+;;             height
+;;             newLine
+;;             newPath
+;;             oldLine
+;;             oldPath
+;;             width
+;;             x
+;;             y
+;;           }
+;;         }
+;;       }
+
+
+(defun code-review-gitlab--top-level-comments (comments)
+  (->> comments
+       (-remove
+        (lambda (it)
+          (a-get it 'inline)))
+       (-map
+        (lambda (it)
+          (let-alist it
+            `(
+              (databaseId . ,.id)
+              (position (height . ,.position.height)
+                        (newLine . ,.position.new_line)
+                        (newPath . ,.position.new_path)
+                        (oldLine . ,.position.old_line)
+                        (oldPath . ,.position.old_path)
+                        (width . ,.position.width)
+                        (x . ,.position.x)
+                        (y . ,.position.y))
+              (bodyHTML . ,.body)
+              (author (login . ,.author.name))
+              (createdAt . ,.created_at)
+              (updatedAt . ,.updated_at)
+              (resolvable . ,.resolvable)
+              (system . , .system)
+              (discussion (id  . ,.discussion.id))
+              (type . ,.type)))))))
+
+
+;;;  ====================
+;;       id
+;;       author {
+;;         login:username
+;;         url:webUrl
+;;       }
+;;       diffRefs {
+;;         baseSha
+;;         headSha
+;;         startSha
+;;       }
+;;       headRefName:sourceBranch
+;;       baseRefName:targetBranch
+;;       number: iid
+;;       isDraft: draft
+;;       databaseId: iid
+;;       createdAt
+;;       updatedAt
+;;       milestone {
+;;         title
+;;       }
+;;       title
+;;       state
+;;       bodyHTML:descriptionHtml
+
+(defun code-review-gitlab--pullreq-info (it)
+  `(
+    (id  ,(a-get it 'id))
+    (autor
+     (login . ,(a-get  (a-get it 'author) 'name)))
+     (url . ,(a-get  (a-get it 'author) 'web_url))
+     (diffRes
+      (baseSha . ,(a-get (a-get it 'diff_refs) 'base_sha))
+      (headSha . ,(a-get (a-get it 'diff_refs) 'head_sha))
+      (startSha . ,(a-get (a-get it 'diff_refs) 'start_sha))
+      )
+     (headRefname . ,(a-get it 'source_branch))
+     (baseRefname . ,(a-get it 'target_branch))
+     (number . ,(a-get it 'number))
+     (databaseId . ,(a-get it 'iid))
+     (bodyHTML . ,(a-get it 'description))
+     (createdAt . ,(a-get it 'created_at))
+     (updatedAt . ,(a-get it 'updated_at))
+     (title . ,(a-get it 'title))
+    (state . ,(a-get it 'state))
+    )
+
+  ;;         (url . ,it.author.web_url))
+  ;; (diffRefs (baseSha . ,it.diff_refs.base_sha)
+  ;;           (headSha . ,it.diff_refs.head_sha)
+  ;;           (startSha . ,it.diff_refs.start_sha))
+  ;; (headRefName . ,it.source_branch)
+  ;; (baseRefName . ,it.target_branch)
+  ;; (number : ,it.iid)
+  ;; (databaseId : ,it.iid)
+  ;; (bodyHTML . ,it.description)
+  ;; (createdAt . ,it.created_at)
+  ;; (updatedAt . ,it.updated_at)
+  ;; (milestone (title . ,it.milestore.title))
+  ;; (title . ,it.title)
+  )
+
+
+
+     
+
+  (cl-defmethod code-review-pullreq-infos (gitlab code-review-gitlab-repo fallback callback)
+    (let ((res (code-review-gitlab--pullreq-info (glab-get (format "/v4/projects/%s/merge_requests/%s"
+                             (code-review-gitlab--project-id gitlab) (oref gitlab number))
+                     nil
+                     :unpaginate t
+                     :host code-review-gitlab-host
+                     :auth 'code-review
+                     :noerror 'return))))
+      (if (string-equal (a-get res 'type) "error")
+          (prin1 res)
+        (let ((raw-commits (
+                            glab-get
+                            (format "/v4/projects/%s/merge_requests/%s/commits" (code-review-gitlab--project-id gitlab) (oref gitlab number))
+                            nil
+                            :unpaginate t
+                            :host code-review-gitlab-host
+                            :auth 'code-review
+                            :noerror 'return)))
+          (setq tt raw-commits)
+          (if (string-equal (a-get raw-commits 'type) "error")
+              (prin1 raw-commits)
+            (let ((commits (code-review-gitlab--commits raw-commits))
+                  (raw-comments (
+                                 glab-get
+                                 (format "/v4/projects/%s/merge_requests/%s/notes"
+                                         (code-review-gitlab--project-id gitlab) (oref gitlab number))
+                                 nil
+                                 :unpaginate t
+                                 :host code-review-gitlab-host
+                                 :auth 'code-review
+                                 :noerror 'return)))
+              (if (string-equal (a-get raw-comments 'type) "error")
+                  (prin1 raw-comments)
+                (let* ((comments (-remove
+                                  (lambda (it)
+                                    (a-get it 'deleted))
+                                  raw-comments))
+                       (top-level-comments (code-review-gitlab--top-level-comments comments)))
+                  (funcall callback (-> res
+                                        (a-assoc-in (list 'comments 'nodes) top-level-comments)
+                                        (a-assoc 'commits commits)))))))))))
+
 
 (cl-defmethod code-review-infos-deferred ((gitlab code-review-gitlab-repo) &optional fallback?)
   "Get PR infos from GITLAB.
